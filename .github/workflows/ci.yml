@@ -1,48 +1,63 @@
-name: ci
+name: CI
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
 
 jobs:
   backend:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+
       - name: Install backend
         run: |
           python -m pip install --upgrade pip
-          pip install -e ./backend pytest
-      - name: Run backend tests
-        env:
-          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          ADMIN_API_TOKEN: ci-admin-token
-          DATABASE_URL: postgresql+psycopg://inspectra:inspectra@localhost:5432/inspectra
-          REDIS_URL: redis://localhost:6379/0
-        run: pytest backend/tests -q
+          pip install -e ./backend
+
+      - name: Run tests
+        run: |
+          pytest backend/tests
 
   frontend:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-      - name: Install frontend deps
-        working-directory: ui
-        run: npm ci
-      - name: Build frontend
-        working-directory: ui
-        run: npm run build
 
-  compose-config:
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate docker compose config
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: |
+          cd ui
+          npm ci
+
+      - name: Build
+        run: |
+          cd ui
+          npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Validate docker compose
         run: docker compose config
