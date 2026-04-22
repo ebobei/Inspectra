@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+
+__pycache__/
+*.pyc
+
+node_modules/
+ui/dist/
+
+dist/
+build/
+
+*.log
