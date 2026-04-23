@@ -5,6 +5,10 @@ from typing import Any
 import httpx
 
 
+class JiraCommentNotFoundError(Exception):
+    pass
+
+
 class JiraClient:
     def __init__(self, *, base_url: str, token: str, timeout: int = 60) -> None:
         self.base_url = base_url.rstrip("/")
@@ -17,7 +21,12 @@ class JiraClient:
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         with httpx.Client(timeout=self.timeout) as client:
-            response = client.request(method, f"{self.base_url}{path}", headers=self.headers, **kwargs)
+            response = client.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=self.headers,
+                **kwargs,
+            )
             response.raise_for_status()
             return response
 
@@ -32,20 +41,45 @@ class JiraClient:
 
     def fetch_issue(self, issue_key: str) -> dict[str, Any]:
         params = {"fields": "summary,description,status,issuetype,priority"}
-        response = self._request("GET", f"/rest/api/3/issue/{issue_key}", params=params)
+        response = self._request(
+            "GET",
+            f"/rest/api/3/issue/{issue_key}",
+            params=params,
+        )
         return response.json()
 
     def create_comment(self, issue_key: str, body: str) -> str:
         payload = {"body": body}
-        response = self._request("POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload)
+        response = self._request(
+            "POST",
+            f"/rest/api/3/issue/{issue_key}/comment",
+            json=payload,
+        )
         data = response.json()
         return str(data["id"])
 
     def update_comment(self, issue_key: str, comment_id: str, body: str) -> None:
         payload = {"body": body}
-        self._request("PUT", f"/rest/api/3/issue/{issue_key}/comment/{comment_id}", json=payload)
 
-    def normalize_issue(self, issue_payload: dict[str, Any]) -> tuple[str | None, str, dict[str, Any]]:
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.request(
+                "PUT",
+                f"{self.base_url}/rest/api/3/issue/{issue_key}/comment/{comment_id}",
+                headers=self.headers,
+                json=payload,
+            )
+
+        if response.status_code == 404:
+            raise JiraCommentNotFoundError(
+                f"Jira comment '{comment_id}' was not found for issue '{issue_key}'."
+            )
+
+        response.raise_for_status()
+
+    def normalize_issue(
+        self,
+        issue_payload: dict[str, Any],
+    ) -> tuple[str | None, str, dict[str, Any]]:
         fields = issue_payload.get("fields", {})
         title = fields.get("summary")
         description = self._adf_to_text(fields.get("description"))
