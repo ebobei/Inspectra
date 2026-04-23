@@ -29,33 +29,13 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    defaults:
-      run:
-        working-directory: ui
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Show versions
-        run: |
-          node -v
-          npm -v
-
-      - name: Install and build frontend
-        env:
-          NODE_ENV: development
-        run: |
-          npm install
-          ./node_modules/.bin/vite --version
-          npm run build
+      - name: Build UI image
+        run: docker build -f ui/Dockerfile -t inspectra-ui-ci .
 
   docker:
     runs-on: ubuntu-latest
