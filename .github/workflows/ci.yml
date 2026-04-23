@@ -25,8 +25,7 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: |
-          pytest backend/tests
+        run: pytest backend/tests
 
   frontend:
     runs-on: ubuntu-latest
@@ -44,14 +43,12 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Install deps
-        run: |
-          cd ui
-          npm ci
+        working-directory: ui
+        run: npm ci --include=dev
 
       - name: Build
-        run: |
-          cd ui
-          npm run build
+        working-directory: ui
+        run: npx vite build
 
   docker:
     runs-on: ubuntu-latest
