@@ -49,14 +49,13 @@ jobs:
           node -v
           npm -v
 
-      - name: Install deps
-        run: npm install
-
-      - name: Verify vite
-        run: npx vite --version
-
-      - name: Build
-        run: npm run build
+      - name: Install and build frontend
+        env:
+          NODE_ENV: development
+        run: |
+          npm install
+          ./node_modules/.bin/vite --version
+          npm run build
 
   docker:
     runs-on: ubuntu-latest
