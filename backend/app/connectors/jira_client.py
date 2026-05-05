@@ -51,7 +51,7 @@ class JiraClient:
             return response
 
     def test_connection(self) -> dict[str, Any]:
-        response = self._request("GET", "/rest/api/3/myself")
+        response = self._request("GET", "/rest/api/2/myself")
         data = response.json()
         return {
             "account_id": data.get("accountId"),
@@ -63,7 +63,7 @@ class JiraClient:
         params = {"fields": "summary,description,status,issuetype,priority"}
         response = self._request(
             "GET",
-            f"/rest/api/3/issue/{issue_key}",
+            f"/rest/api/2/issue/{issue_key}",
             params=params,
         )
         return response.json()
@@ -72,7 +72,7 @@ class JiraClient:
         payload = {"body": body}
         response = self._request(
             "POST",
-            f"/rest/api/3/issue/{issue_key}/comment",
+            f"/rest/api/2/issue/{issue_key}/comment",
             json=payload,
         )
         data = response.json()
@@ -88,7 +88,7 @@ class JiraClient:
         ) as client:
             response = client.request(
                 "PUT",
-                f"{self.base_url}/rest/api/3/issue/{issue_key}/comment/{comment_id}",
+                f"{self.base_url}/rest/api/2/issue/{issue_key}/comment/{comment_id}",
                 headers=self.headers,
                 json=payload,
             )
