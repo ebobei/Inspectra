@@ -12,6 +12,8 @@ export default {
     light: 'Светлая',
     dark: 'Тёмная',
     enabled: 'Включено',
+    show: 'Показать',
+    hide: 'Скрыть',
   },
   nav: {
     dashboard: 'Панель',
@@ -50,6 +52,8 @@ export default {
     baseUrl: 'Базовый URL',
     authType: 'Тип авторизации',
     secret: 'Секрет',
+    secretPlaceholder: 'Токен или login:password',
+    secretHint: 'Для basic auth используйте login:password. Значение отправляется только на backend и не отображается вне этой формы.',
     jiraPlaceholder: 'https://jira.example.com',
     gitlabPlaceholder: 'https://gitlab.example.com',
     confluencePlaceholder: 'https://your-domain.atlassian.net',

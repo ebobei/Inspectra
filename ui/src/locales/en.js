@@ -12,6 +12,8 @@ export default {
     light: 'Light',
     dark: 'Dark',
     enabled: 'Enabled',
+    show: 'Show',
+    hide: 'Hide',
   },
   nav: {
     dashboard: 'Dashboard',
@@ -50,6 +52,8 @@ export default {
     baseUrl: 'Base URL',
     authType: 'Auth type',
     secret: 'Secret',
+    secretPlaceholder: 'Token or login:password',
+    secretHint: 'For basic auth use login:password. The value is sent only to the backend and is not shown outside this form.',
     jiraPlaceholder: 'https://jira.example.com',
     gitlabPlaceholder: 'https://gitlab.example.com',
     confluencePlaceholder: 'https://your-domain.atlassian.net',
