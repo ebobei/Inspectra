@@ -51,9 +51,13 @@ class LLMService:
         }
 
         last_error: Exception | None = None
+
         for attempt in range(1, settings.llm_max_retries + 1):
             try:
-                with httpx.Client(timeout=settings.request_timeout_sec) as client:
+                with httpx.Client(
+                    timeout=settings.request_timeout_sec,
+                    verify=settings.llm_verify_ssl,
+                ) as client:
                     response = client.post(
                         f"{settings.llm_base_url.rstrip('/')}/chat/completions",
                         headers=headers,
@@ -61,26 +65,41 @@ class LLMService:
                     )
                     response.raise_for_status()
                     data = response.json()
+
                 content = data["choices"][0]["message"]["content"]
                 parsed = json.loads(content)
                 self._validate_response(parsed)
                 return parsed
+
             except Exception as exc:
                 last_error = exc
                 logger.warning(
                     "LLM review attempt failed",
-                    extra={"event_type": "llm.review.retry", "session_id": prompt_payload.get("session_id")},
+                    extra={
+                        "event_type": "llm.review.retry",
+                        "session_id": prompt_payload.get("session_id"),
+                        "attempt": attempt,
+                        "llm_verify_ssl": settings.llm_verify_ssl,
+                    },
                     exc_info=True,
                 )
+
                 if attempt < settings.llm_max_retries:
                     time.sleep(min(2 ** (attempt - 1), 4))
 
         logger.error(
             "LLM review failed, using fallback response",
-            extra={"event_type": "llm.review.fallback", "session_id": prompt_payload.get("session_id")},
+            extra={
+                "event_type": "llm.review.fallback",
+                "session_id": prompt_payload.get("session_id"),
+                "llm_verify_ssl": settings.llm_verify_ssl,
+            },
             exc_info=last_error,
         )
-        return self._safe_fallback(prompt_payload, str(last_error) if last_error else "unknown error")
+        return self._safe_fallback(
+            prompt_payload,
+            str(last_error) if last_error else "unknown error",
+        )
 
     def _validate_settings(self) -> None:
         if not settings.llm_api_key:
@@ -93,21 +112,31 @@ class LLMService:
     def _validate_response(self, parsed: dict[str, Any]) -> None:
         if not isinstance(parsed, dict):
             raise ValueError("LLM response is not a JSON object")
+
         missing = self.REQUIRED_KEYS.difference(parsed.keys())
         if missing:
             raise ValueError(f"LLM response missing keys: {sorted(missing)}")
+
         if not isinstance(parsed["resolved_finding_keys"], list):
             raise ValueError("resolved_finding_keys must be a list")
+
         if not isinstance(parsed["still_open_findings"], list):
             raise ValueError("still_open_findings must be a list")
+
         if not isinstance(parsed["new_findings"], list):
             raise ValueError("new_findings must be a list")
+
         if not isinstance(parsed["final_comment_markdown"], str):
             raise ValueError("final_comment_markdown must be a string")
 
-    def _safe_fallback(self, prompt_payload: dict[str, Any], reason: str) -> dict[str, Any]:
+    def _safe_fallback(
+        self,
+        prompt_payload: dict[str, Any],
+        reason: str,
+    ) -> dict[str, Any]:
         iteration_count = prompt_payload.get("iteration_count")
         max_iterations = prompt_payload.get("max_iterations")
+
         return {
             "summary": "LLM response validation failed; returning safe fallback.",
             "resolved_finding_keys": [],

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_base_url: str | None = "https://openrouter.ai/api/v1"
     llm_api_key: str | None = None
     llm_model: str | None = None
+    llm_verify_ssl: bool = True
     request_timeout_sec: int = 60
     llm_max_retries: int = 3
     publish_max_retries: int = 3
