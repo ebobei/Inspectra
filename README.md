@@ -62,20 +62,21 @@ docker compose up --build
 ```
 
 Open:
-- API docs: `http://localhost:8000/docs`
-- Admin UI: `http://localhost:8080`
+- Admin UI: `http://localhost:18080`
+- API docs: `http://localhost:18080/api/docs`
 
 Before using the admin UI, open **Settings** and paste the same `ADMIN_API_TOKEN` value there.
 
 ## Smoke start checklist
-1. Open `http://localhost:8000/api/health` and confirm database + redis are both `ok`.
-2. Open `http://localhost:8080` and set `ADMIN_API_TOKEN` in **Settings**.
+1. Open `http://localhost:18080/api/health` and confirm database + redis are both `ok`.
+2. Open `http://localhost:18080` and set `ADMIN_API_TOKEN` in **Settings**.
 3. Create one connector.
 4. Create one session.
 5. Run the session and confirm that a publication attempt appears in the UI.
 
 ## Runtime expectations
 - `docker compose up --build` is the supported local startup path.
+- Only the UI/nginx port is exposed by default. Backend, PostgreSQL and Redis stay inside the Docker Compose network.
 - In `APP_ENV=production`, the backend refuses to start with default `ENCRYPTION_KEY` or `ADMIN_API_TOKEN`.
 - `/api/health` checks API, database, and Redis availability.
 
@@ -89,3 +90,12 @@ Before using the admin UI, open **Settings** and paste the same `ADMIN_API_TOKEN
 - backend unit tests: `pytest backend/tests -q`
 - frontend build: `cd ui && npm ci && npm run build`
 - compose config check: `docker compose config`
+
+
+## Review prompt
+The default review prompt is stored in files instead of being hardcoded in Python:
+
+- `backend/app/prompts/review_system.ru.txt`
+- `backend/app/prompts/review_user.ru.txt`
+
+`REVIEW_PROMPT_LANGUAGE=ru` is the default. Keep this simple: edit the files when the pilot needs prompt changes. Do not introduce prompt profiles or a database-backed prompt editor until there is a real operational need.

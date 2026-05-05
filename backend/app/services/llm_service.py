@@ -1,6 +1,9 @@
+import hashlib
 import json
 import logging
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,19 +25,10 @@ class LLMService:
     def review(self, prompt_payload: dict[str, Any]) -> dict[str, Any]:
         self._validate_settings()
 
-        system_prompt = (
-            "You are Inspectra, a review engine for software artifacts. "
-            "Return ONLY valid JSON matching the expected schema. "
-            "Never repeat findings that are already resolved. "
-            "If a finding remains unresolved on later iterations, keep the message shorter and calmer. "
-            "Do not wrap JSON in markdown fences."
-        )
-        user_prompt = (
-            "Analyze the current artifact and prior review context. "
-            "Detect unresolved issues, resolved issues, and new issues. "
-            "Return JSON with keys: summary, resolved_finding_keys, still_open_findings, new_findings, final_comment_markdown.\n\n"
-            f"Payload:\n{json.dumps(prompt_payload, ensure_ascii=False)}"
-        )
+        payload_json = json.dumps(prompt_payload, ensure_ascii=False, indent=2)
+        system_prompt = self._load_prompt_file("review_system", default=self._default_system_prompt())
+        user_prompt_template = self._load_prompt_file("review_user", default=self._default_user_prompt())
+        user_prompt = user_prompt_template.replace("{payload_json}", payload_json)
 
         request_body = {
             "model": settings.llm_model,
@@ -67,9 +61,8 @@ class LLMService:
                     data = response.json()
 
                 content = data["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                self._validate_response(parsed)
-                return parsed
+                parsed = self._parse_json_content(content)
+                return self._normalize_response(parsed, prompt_payload)
 
             except Exception as exc:
                 last_error = exc
@@ -94,7 +87,11 @@ class LLMService:
                 "session_id": prompt_payload.get("session_id"),
                 "llm_verify_ssl": settings.llm_verify_ssl,
             },
-            exc_info=last_error,
+            exc_info=(
+                (type(last_error), last_error, last_error.__traceback__)
+                if last_error
+                else None
+            ),
         )
         return self._safe_fallback(
             prompt_payload,
@@ -109,10 +106,53 @@ class LLMService:
         if not settings.llm_base_url:
             raise ValueError("LLM_BASE_URL is not configured")
 
-    def _validate_response(self, parsed: dict[str, Any]) -> None:
+    def _load_prompt_file(self, name: str, *, default: str) -> str:
+        language = (settings.review_prompt_language or "ru").strip().lower()
+        prompt_dir = Path(__file__).resolve().parents[1] / "prompts"
+        prompt_path = prompt_dir / f"{name}.{language}.txt"
+
+        try:
+            text = prompt_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            logger.warning(
+                "Prompt file not found; using built-in fallback prompt",
+                extra={
+                    "event_type": "llm.prompt.fallback",
+                    "prompt_path": str(prompt_path),
+                    "prompt_language": language,
+                },
+            )
+            return default
+
+        return text or default
+
+    def _parse_json_content(self, content: Any) -> dict[str, Any]:
+        if not isinstance(content, str):
+            raise ValueError("LLM response content is not a string")
+
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text).strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise
+            parsed = json.loads(text[start : end + 1])
+
         if not isinstance(parsed, dict):
             raise ValueError("LLM response is not a JSON object")
+        return parsed
 
+    def _normalize_response(
+        self,
+        parsed: dict[str, Any],
+        prompt_payload: dict[str, Any],
+    ) -> dict[str, Any]:
         missing = self.REQUIRED_KEYS.difference(parsed.keys())
         if missing:
             raise ValueError(f"LLM response missing keys: {sorted(missing)}")
@@ -128,6 +168,118 @@ class LLMService:
 
         if not isinstance(parsed["final_comment_markdown"], str):
             raise ValueError("final_comment_markdown must be a string")
+
+        tone_level = str(prompt_payload.get("tone_level") or "neutral")
+        return {
+            "summary": str(parsed.get("summary") or ""),
+            "resolved_finding_keys": [
+                str(item).strip()
+                for item in parsed.get("resolved_finding_keys", [])
+                if str(item).strip()
+            ],
+            "still_open_findings": self._normalize_findings(
+                parsed.get("still_open_findings", []),
+                default_tone_level=tone_level,
+            ),
+            "new_findings": self._normalize_findings(
+                parsed.get("new_findings", []),
+                default_tone_level=tone_level,
+            ),
+            "final_comment_markdown": parsed["final_comment_markdown"].strip(),
+        }
+
+    def _normalize_findings(
+        self,
+        findings: list[Any],
+        *,
+        default_tone_level: str,
+    ) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+
+        for raw in findings:
+            if not isinstance(raw, dict):
+                logger.warning(
+                    "Skipping malformed LLM finding because it is not an object",
+                    extra={"event_type": "llm.finding.skipped"},
+                )
+                continue
+
+            category = self._clean_text(raw.get("category"), default="general")
+            severity = self._clean_text(raw.get("severity"), default="medium")
+            title = self._clean_text(raw.get("title"), default="Review finding")
+            description = self._clean_text(raw.get("description"), default=title)
+            tone_level = self._clean_text(raw.get("tone_level"), default=default_tone_level)
+            finding_key = self._clean_text(raw.get("finding_key") or raw.get("key"), default="")
+
+            if not finding_key:
+                finding_key = self._build_finding_key(
+                    category=category,
+                    severity=severity,
+                    title=title,
+                    description=description,
+                )
+                logger.warning(
+                    "LLM finding did not contain finding_key; generated a fallback key",
+                    extra={
+                        "event_type": "llm.finding_key.generated",
+                        "finding_key": finding_key,
+                    },
+                )
+
+            normalized.append(
+                {
+                    "finding_key": finding_key,
+                    "category": category,
+                    "severity": severity,
+                    "title": title,
+                    "description": description,
+                    "tone_level": tone_level,
+                }
+            )
+
+        return normalized
+
+    def _build_finding_key(
+        self,
+        *,
+        category: str,
+        severity: str,
+        title: str,
+        description: str,
+    ) -> str:
+        basis = "|".join(
+            [
+                category.strip().lower(),
+                severity.strip().lower(),
+                title.strip().lower(),
+                description.strip().lower(),
+            ]
+        )
+        digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:12]
+        safe_category = re.sub(r"[^a-z0-9_-]+", "-", category.lower()).strip("-") or "general"
+        return f"{safe_category}:{digest}"
+
+    def _clean_text(self, value: Any, *, default: str) -> str:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text or default
+
+    def _default_system_prompt(self) -> str:
+        return (
+            "Ты Inspectra, движок review для инженерных артефактов. "
+            "Верни только валидный JSON по ожидаемой схеме. "
+            "Не оборачивай JSON в markdown. "
+            "У каждого замечания обязательно должен быть finding_key."
+        )
+
+    def _default_user_prompt(self) -> str:
+        return (
+            "Проанализируй текущий артефакт и предыдущий контекст review. "
+            "Верни JSON с ключами: summary, resolved_finding_keys, "
+            "still_open_findings, new_findings, final_comment_markdown.\n\n"
+            "Payload:\n{payload_json}"
+        )
 
     def _safe_fallback(
         self,

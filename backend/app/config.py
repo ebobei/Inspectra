@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     request_timeout_sec: int = 60
     llm_max_retries: int = 3
     publish_max_retries: int = 3
+    review_prompt_language: str = "ru"
 
     encryption_key: str = "change-me-change-me-change-me"
     admin_api_token: str = "change-me-admin-token"
@@ -37,9 +38,9 @@ class Settings(BaseSettings):
     gitlab_enabled: bool = True
     confluence_enabled: bool = True
 
-    ui_default_locale: str = "en"
+    ui_default_locale: str = "ru"
     ui_allowed_origins: str = (
-        "http://localhost:8080,http://localhost:4173,http://localhost:5173"
+        "http://localhost:18080,http://localhost:4173,http://localhost:5173"
     )
 
     webhook_shared_secret: str | None = None

@@ -17,28 +17,84 @@ export function setAdminToken(value) {
 
 async function request(path, options = {}) {
   const adminToken = getAdminToken()
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(adminToken ? { 'X-Inspectra-Admin-Token': adminToken } : {}),
-      ...(options.headers || {}),
-    },
-    ...options,
-  })
+  let response
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(adminToken ? { 'X-Inspectra-Admin-Token': adminToken } : {}),
+        ...(options.headers || {}),
+      },
+      ...options,
+    })
+  } catch (err) {
+    throw new Error(
+      'Backend недоступен. Проверьте, что docker compose запущен, UI открыт через правильный порт, а nginx может проксировать /api в backend.',
+    )
+  }
 
   if (!response.ok) {
-    let detail = `Request failed with status ${response.status}`
-    try {
-      const payload = await response.json()
-      detail = payload.detail || payload.message || detail
-    } catch {
-      // ignore json parsing failure
-    }
-    throw new Error(detail)
+    throw new Error(await readErrorMessage(response))
   }
 
   if (response.status === 204) return null
   return response.json()
+}
+
+async function readErrorMessage(response) {
+  const fallback = `Backend вернул HTTP ${response.status}`
+  const contentType = response.headers.get('content-type') || ''
+
+  if (contentType.includes('application/json')) {
+    try {
+      const payload = await response.json()
+      return normalizeErrorPayload(payload, fallback)
+    } catch {
+      return fallback
+    }
+  }
+
+  try {
+    const text = await response.text()
+    return text.trim() || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeErrorPayload(payload, fallback) {
+  if (!payload) return fallback
+
+  const detail = payload.detail || payload.message || payload.error
+  if (!detail) return fallback
+
+  if (typeof detail === 'string') return detail
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (!item || typeof item !== 'object') return ''
+
+        const location = Array.isArray(item.loc) ? item.loc.join('.') : ''
+        const message = item.msg || item.message || ''
+        return [location, message].filter(Boolean).join(': ')
+      })
+      .filter(Boolean)
+
+    return messages.length ? messages.join('\n') : fallback
+  }
+
+  if (typeof detail === 'object') {
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return fallback
+    }
+  }
+
+  return String(detail)
 }
 
 export const api = {

@@ -6,8 +6,6 @@ services:
       POSTGRES_DB: inspectra
       POSTGRES_USER: inspectra
       POSTGRES_PASSWORD: inspectra
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +17,6 @@ services:
   redis:
     image: redis:7
     container_name: inspectra-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -35,8 +31,6 @@ services:
     command: ["/app/backend/scripts/docker-api-entrypoint.sh"]
     env_file:
       - .env
-    ports:
-      - "${API_PORT:-8081}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -70,7 +64,7 @@ services:
       dockerfile: ui/Dockerfile
     container_name: inspectra-ui
     ports:
-      - "${UI_PORT:-8080}:80"
+      - "${UI_PORT:-18080}:80"
     depends_on:
       api:
         condition: service_healthy
