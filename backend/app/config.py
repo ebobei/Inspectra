@@ -12,9 +12,6 @@ class Settings(BaseSettings):
 
     app_name: str = "Inspectra"
     app_env: str = "development"
-    app_host: str = "0.0.0.0"
-    app_port: int = 8000
-    app_base_url: str = "http://localhost:8000"
 
     database_url: str = Field(
         default="postgresql+psycopg://inspectra:inspectra@db:5432/inspectra"
@@ -40,7 +37,9 @@ class Settings(BaseSettings):
     confluence_enabled: bool = True
 
     ui_default_locale: str = "en"
-    ui_allowed_origins: str = "http://localhost:8080,http://localhost:4173,http://localhost:5173"
+    ui_allowed_origins: str = (
+        "http://localhost:8080,http://localhost:4173,http://localhost:5173"
+    )
 
     webhook_shared_secret: str | None = None
 
