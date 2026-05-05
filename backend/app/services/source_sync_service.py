@@ -92,7 +92,11 @@ class SourceSyncService:
     def _create_jira_snapshot(self, db: Session, *, source_object: SourceObject) -> SourceSnapshot:
         credential = self._get_active_credential(db, source_object=source_object, expected_type='jira')
         token = CryptoService().decrypt(credential.secret_encrypted)
-        jira = JiraClient(base_url=credential.base_url, token=token)
+        jira = JiraClient(
+            base_url=credential.base_url,
+            token=token,
+            auth_type=credential.auth_type,
+        )
         issue_payload = jira.fetch_issue(source_object.external_id)
         title, normalized_text, metadata = jira.normalize_issue(issue_payload)
 

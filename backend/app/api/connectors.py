@@ -56,7 +56,11 @@ def test_connector(connector_id: UUID, db: Session = Depends(get_db)) -> Connect
     secret = CryptoService().decrypt(connector.secret_encrypted)
 
     if connector.connector_type == 'jira':
-        details = JiraClient(base_url=connector.base_url, token=secret).test_connection()
+        details = JiraClient(
+            base_url=connector.base_url,
+            token=secret,
+            auth_type=connector.auth_type,
+        ).test_connection()
         display_name = details.get('display_name') or details.get('account_id') or 'unknown'
         result = ConnectorTestResponse(ok=True, connector_type='jira', details=f'Connected as {display_name}')
     elif connector.connector_type == 'gitlab':

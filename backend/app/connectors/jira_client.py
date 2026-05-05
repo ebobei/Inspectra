@@ -10,17 +10,37 @@ class JiraCommentNotFoundError(Exception):
 
 
 class JiraClient:
-    def __init__(self, *, base_url: str, token: str, timeout: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        auth_type: str = "bearer",
+        timeout: int = 60,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.auth_type = auth_type
         self.headers = {
-            "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
 
+        if auth_type == "basic":
+            if ":" not in token:
+                raise ValueError("Basic auth secret must be in format 'login:password'")
+            username, password = token.split(":", 1)
+            self._auth: tuple[str, str] | None = (username, password)
+        else:
+            self._auth = None
+            self.headers["Authorization"] = f"Bearer {token}"
+
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(
+            timeout=self.timeout,
+            auth=self._auth,
+            follow_redirects=False,
+        ) as client:
             response = client.request(
                 method,
                 f"{self.base_url}{path}",
@@ -61,7 +81,11 @@ class JiraClient:
     def update_comment(self, issue_key: str, comment_id: str, body: str) -> None:
         payload = {"body": body}
 
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(
+            timeout=self.timeout,
+            auth=self._auth,
+            follow_redirects=False,
+        ) as client:
             response = client.request(
                 "PUT",
                 f"{self.base_url}/rest/api/3/issue/{issue_key}/comment/{comment_id}",

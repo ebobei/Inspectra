@@ -7,7 +7,7 @@ class ConnectorCreateRequest(BaseModel):
     connector_type: str
     name: str
     base_url: str
-    auth_type: str = Field(default="token")
+    auth_type: str = Field(default="bearer")
     secret_plain: str
 
 

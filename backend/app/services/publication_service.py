@@ -211,7 +211,11 @@ class PublicationService:
     ) -> tuple[str, str, str | None]:
         credential = self._get_credential(db, session=session, expected_type="jira")
         token = CryptoService().decrypt(credential.secret_encrypted)
-        jira = JiraClient(base_url=credential.base_url, token=token)
+        jira = JiraClient(
+            base_url=credential.base_url,
+            token=token,
+            auth_type=credential.auth_type,
+        )
 
         if external_comment_id:
             try:
