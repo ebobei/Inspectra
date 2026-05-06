@@ -73,6 +73,24 @@ class GitLabClient:
         data = response.json()
         return str(data["id"])
 
+    def get_note(self, project_id: str, mr_iid: str, note_id: str) -> dict[str, Any]:
+        encoded_project = quote(project_id, safe="")
+
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.request(
+                "GET",
+                f"{self.base_url}/api/v4/projects/{encoded_project}/merge_requests/{mr_iid}/notes/{note_id}",
+                headers=self.headers,
+            )
+
+        if response.status_code == 404:
+            raise GitLabNoteNotFoundError(
+                f"GitLab note '{note_id}' was not found for merge request '{project_id}!{mr_iid}'."
+            )
+
+        response.raise_for_status()
+        return response.json()
+
     def update_note(self, project_id: str, mr_iid: str, note_id: str, body: str) -> None:
         encoded_project = quote(project_id, safe="")
 

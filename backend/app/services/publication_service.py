@@ -20,6 +20,78 @@ logger = logging.getLogger(__name__)
 
 
 class PublicationService:
+    def ensure_current_publication(
+        self,
+        db: Session,
+        *,
+        session: ReviewSession,
+        review_run_id,
+        target_system: str,
+        target_object_id: str,
+    ) -> Publication | None:
+        latest = self._get_latest_publication(db, session=session)
+        if latest is None or latest.status != "success":
+            return None
+
+        if not latest.external_comment_id:
+            return self.publish_or_update(
+                db,
+                session=session,
+                review_run_id=review_run_id,
+                body_markdown=latest.published_body_markdown,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                allow_noop=False,
+            )
+
+        try:
+            self._ensure_external_comment_exists(
+                db=db,
+                session=session,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                external_comment_id=latest.external_comment_id,
+            )
+            publication = Publication(
+                review_session_id=session.id,
+                review_run_id=review_run_id,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                external_comment_id=latest.external_comment_id,
+                published_body_markdown=latest.published_body_markdown,
+                publication_mode="noop",
+                status="success",
+                published_at=datetime.now(timezone.utc),
+                error_message=None,
+            )
+            db.add(publication)
+            db.flush()
+            session.current_publication_id = publication.id
+            return publication
+        except (JiraCommentNotFoundError, GitLabNoteNotFoundError, ConfluenceCommentNotFoundError):
+            return self.publish_or_update(
+                db,
+                session=session,
+                review_run_id=review_run_id,
+                body_markdown=latest.published_body_markdown,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                allow_noop=False,
+            )
+
+    def _get_latest_publication(
+        self,
+        db: Session,
+        *,
+        session: ReviewSession,
+    ) -> Publication | None:
+        return (
+            db.query(Publication)
+            .filter(Publication.review_session_id == session.id)
+            .order_by(Publication.created_at.desc())
+            .first()
+        )
+
     def publish_or_update(
         self,
         db: Session,
@@ -29,18 +101,15 @@ class PublicationService:
         body_markdown: str,
         target_system: str,
         target_object_id: str,
+        allow_noop: bool = True,
     ) -> Publication:
-        latest = (
-            db.query(Publication)
-            .filter(Publication.review_session_id == session.id)
-            .order_by(Publication.created_at.desc())
-            .first()
-        )
+        latest = self._get_latest_publication(db, session=session)
 
         external_comment_id = latest.external_comment_id if latest else None
 
         if (
-            latest
+            allow_noop
+            and latest
             and latest.published_body_markdown == body_markdown
             and latest.status == "success"
         ):
@@ -136,6 +205,57 @@ class PublicationService:
 
         assert last_error is not None
         raise last_error
+
+    def _ensure_external_comment_exists(
+        self,
+        db: Session,
+        session: ReviewSession,
+        target_system: str,
+        target_object_id: str,
+        external_comment_id: str,
+    ) -> None:
+        if target_system == "jira":
+            credential = self._get_credential(db, session=session, expected_type="jira")
+            token = CryptoService().decrypt(credential.secret_encrypted)
+            jira = JiraClient(
+                base_url=credential.base_url,
+                token=token,
+                auth_type=credential.auth_type,
+            )
+            jira.get_comment(issue_key=target_object_id, comment_id=external_comment_id)
+            return
+
+        if target_system == "gitlab":
+            credential = self._get_credential(db, session=session, expected_type="gitlab")
+            token = CryptoService().decrypt(credential.secret_encrypted)
+            gitlab = GitLabClient(base_url=credential.base_url, token=token)
+            project_id, mr_iid = gitlab.parse_external_id(target_object_id)
+            gitlab.get_note(
+                project_id=project_id,
+                mr_iid=mr_iid,
+                note_id=external_comment_id,
+            )
+            return
+
+        if target_system == "confluence":
+            credential = self._get_credential(
+                db,
+                session=session,
+                expected_type="confluence",
+            )
+            token = CryptoService().decrypt(credential.secret_encrypted)
+            confluence = ConfluenceClient(
+                base_url=credential.base_url,
+                token=token,
+                auth_type=credential.auth_type,
+            )
+            confluence.get_footer_comment(external_comment_id)
+            return
+
+        if target_system == "manual":
+            return
+
+        raise ValueError(f"Unsupported target_system: {target_system}")
 
     def _publish_once(
         self,

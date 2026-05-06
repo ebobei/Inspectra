@@ -78,6 +78,26 @@ class JiraClient:
         data = response.json()
         return str(data["id"])
 
+    def get_comment(self, issue_key: str, comment_id: str) -> dict[str, Any]:
+        with httpx.Client(
+            timeout=self.timeout,
+            auth=self._auth,
+            follow_redirects=False,
+        ) as client:
+            response = client.request(
+                "GET",
+                f"{self.base_url}/rest/api/2/issue/{issue_key}/comment/{comment_id}",
+                headers=self.headers,
+            )
+
+        if response.status_code == 404:
+            raise JiraCommentNotFoundError(
+                f"Jira comment '{comment_id}' was not found for issue '{issue_key}'."
+            )
+
+        response.raise_for_status()
+        return response.json()
+
     def update_comment(self, issue_key: str, comment_id: str, body: str) -> None:
         payload = {"body": body}
 

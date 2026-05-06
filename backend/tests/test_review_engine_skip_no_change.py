@@ -17,25 +17,83 @@ class FakeDB:
         return None
 
 
-def test_review_engine_skips_when_input_hash_did_not_change() -> None:
-    session = SimpleNamespace(
-        id='session-1',
-        status='active',
+class FakePublicationService:
+    def __init__(self, publication=None):
+        self.publication = publication
+        self.calls = []
+
+    def ensure_current_publication(
+        self,
+        db,
+        *,
+        session,
+        review_run_id,
+        target_system,
+        target_object_id,
+    ):
+        self.calls.append(
+            {
+                "session": session,
+                "review_run_id": review_run_id,
+                "target_system": target_system,
+                "target_object_id": target_object_id,
+            }
+        )
+        return self.publication
+
+
+def make_session():
+    return SimpleNamespace(
+        id="session-1",
+        status="active",
         iteration_count=1,
         max_iterations=3,
         last_snapshot_id=None,
         last_review_run_id=None,
-        last_seen_input_hash='hash-1',
+        last_seen_input_hash="hash-1",
         last_success_at=None,
         last_error_at=None,
         last_error_message=None,
+        current_publication_id=None,
         findings=[],
-        source_object=SimpleNamespace(source_type='jira_issue'),
+        source_object=SimpleNamespace(
+            source_type="jira_issue",
+            external_system="jira",
+            external_id="TEST-1",
+        ),
     )
-    snapshot = SimpleNamespace(id='snapshot-1', normalized_text='same', content_hash='hash-1')
+
+
+def test_review_engine_skips_when_input_hash_did_not_change() -> None:
+    session = make_session()
+    snapshot = SimpleNamespace(id="snapshot-1", normalized_text="same", content_hash="hash-1")
     db = FakeDB()
+    publication_service = FakePublicationService()
+    engine = ReviewEngine()
+    engine.publication_service = publication_service
 
-    result = ReviewEngine().run_for_snapshot(db, session=session, snapshot=snapshot, trigger_type='manual')
+    result = engine.run_for_snapshot(db, session=session, snapshot=snapshot, trigger_type="manual")
 
-    assert result.status == 'skipped'
-    assert session.last_seen_input_hash == 'hash-1'
+    assert result.status == "skipped"
+    assert session.last_seen_input_hash == "hash-1"
+    assert publication_service.calls[0]["target_system"] == "jira"
+    assert publication_service.calls[0]["target_object_id"] == "TEST-1"
+
+
+def test_review_engine_marks_no_change_run_success_when_comment_was_recreated() -> None:
+    session = make_session()
+    snapshot = SimpleNamespace(id="snapshot-1", normalized_text="same", content_hash="hash-1")
+    db = FakeDB()
+    publication = SimpleNamespace(
+        id="publication-1",
+        status="success",
+        publication_mode="create",
+    )
+    publication_service = FakePublicationService(publication=publication)
+    engine = ReviewEngine()
+    engine.publication_service = publication_service
+
+    result = engine.run_for_snapshot(db, session=session, snapshot=snapshot, trigger_type="manual")
+
+    assert result.status == "success"
+    assert session.current_publication_id == "publication-1"

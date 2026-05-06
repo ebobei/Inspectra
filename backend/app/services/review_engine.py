@@ -45,29 +45,12 @@ class ReviewEngine:
         diff_result = self.diff_service.compare(previous_text, snapshot.normalized_text)
 
         if session.last_seen_input_hash == snapshot.content_hash or not diff_result.changed:
-            review_run = ReviewRun(
-                review_session_id=session.id,
-                snapshot_id=snapshot.id,
-                run_type="recheck" if session.iteration_count > 0 else "initial",
-                status="skipped",
+            return self._handle_no_change(
+                db,
+                session=session,
+                snapshot=snapshot,
                 trigger_type=trigger_type,
-                llm_model="not-called",
-                prompt_version="skip-no-change",
-                input_hash=snapshot.content_hash,
-                output_hash=sha256_text("skip-no-change"),
-                started_at=datetime.now(timezone.utc),
-                finished_at=datetime.now(timezone.utc),
             )
-            db.add(review_run)
-            db.flush()
-            session.last_snapshot_id = snapshot.id
-            session.last_review_run_id = review_run.id
-            session.last_seen_input_hash = snapshot.content_hash
-            session.last_success_at = datetime.now(timezone.utc)
-            session.last_error_at = None
-            session.last_error_message = None
-            db.flush()
-            return review_run
 
         if session.iteration_count >= session.max_iterations:
             return self._publish_summary_only(
@@ -156,6 +139,76 @@ class ReviewEngine:
             logger.error(
                 "Review run failed",
                 extra={"event_type": "review.run.failed", "session_id": session.id, "run_id": review_run.id},
+                exc_info=True,
+            )
+            review_run.status = "failed"
+            review_run.error_message = str(exc)
+            review_run.finished_at = datetime.now(timezone.utc)
+            session.last_error_at = datetime.now(timezone.utc)
+            session.last_error_message = str(exc)
+            db.flush()
+            raise
+
+    def _handle_no_change(
+        self,
+        db: Session,
+        *,
+        session: ReviewSession,
+        snapshot: SourceSnapshot,
+        trigger_type: str,
+    ) -> ReviewRun:
+        review_run = ReviewRun(
+            review_session_id=session.id,
+            snapshot_id=snapshot.id,
+            run_type="recheck" if session.iteration_count > 0 else "initial",
+            status="running",
+            trigger_type=trigger_type,
+            llm_model="not-called",
+            prompt_version="skip-no-change",
+            input_hash=snapshot.content_hash,
+            output_hash=sha256_text("skip-no-change"),
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(review_run)
+        db.flush()
+
+        try:
+            publication = self.publication_service.ensure_current_publication(
+                db,
+                session=session,
+                review_run_id=review_run.id,
+                target_system=session.source_object.external_system,
+                target_object_id=session.source_object.external_id,
+            )
+            if publication and publication.status == "failed":
+                raise RuntimeError(publication.error_message or "Publication check failed")
+
+            if publication and publication.publication_mode == "create":
+                review_run.status = "success"
+                review_run.output_hash = sha256_text("skip-no-change-comment-recreated")
+            else:
+                review_run.status = "skipped"
+                review_run.output_hash = sha256_text("skip-no-change")
+
+            review_run.finished_at = datetime.now(timezone.utc)
+            session.last_snapshot_id = snapshot.id
+            session.last_review_run_id = review_run.id
+            session.last_seen_input_hash = snapshot.content_hash
+            session.last_success_at = datetime.now(timezone.utc)
+            if publication:
+                session.current_publication_id = publication.id
+            session.last_error_at = None
+            session.last_error_message = None
+            db.flush()
+            return review_run
+        except Exception as exc:
+            logger.error(
+                "No-change review run failed during publication check",
+                extra={
+                    "event_type": "review.no_change_publication_check.failed",
+                    "session_id": str(session.id),
+                    "run_id": str(review_run.id),
+                },
                 exc_info=True,
             )
             review_run.status = "failed"
