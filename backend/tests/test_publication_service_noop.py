@@ -99,7 +99,8 @@ def test_publication_service_recreates_missing_comment_on_no_change() -> None:
     def fake_ensure_external_comment_exists(**kwargs):
         raise JiraCommentNotFoundError("missing")
 
-    def fake_publish_or_update(**kwargs):
+    def fake_publish_or_update(db_arg, **kwargs):
+        assert db_arg is db
         assert kwargs["allow_noop"] is False
         assert kwargs["body_markdown"] == "same body"
         return SimpleNamespace(
