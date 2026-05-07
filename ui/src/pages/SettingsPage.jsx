@@ -76,9 +76,9 @@ export default function SettingsPage() {
         <h3>{t('settings.notesTitle')}</h3>
         <ul className="simple-list">
           <li>{t('settings.localeNote')}</li>
-          <li>{t('settings.originsNote')} <code>UI_ALLOWED_ORIGINS</code>.</li>
-          <li>{t('settings.protectedNote')} <code>X-Inspectra-Admin-Token</code>.</li>
-          <li>{t('settings.webhookNote')} <code>X-Inspectra-Webhook-Secret</code> / <code>WEBHOOK_SHARED_SECRET</code>.</li>
+          <li>{t('settings.originsNote')}</li>
+          <li>{t('settings.protectedNote')}</li>
+          <li>{t('settings.webhookNote')}</li>
         </ul>
       </div>
     </section>

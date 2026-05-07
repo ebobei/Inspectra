@@ -14,6 +14,14 @@
   --btn-secondary: #1b2130;
   --btn-secondary-border: #30384a;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  --notice-success-bg: rgba(45, 128, 77, 0.15);
+  --notice-success-border: #2d7d4f;
+  --notice-success-text: #d7f8e2;
+  --notice-success-accent: #7ee0a3;
+  --notice-error-bg: rgba(181, 53, 53, 0.15);
+  --notice-error-border: #7a2b2b;
+  --notice-error-text: #ffd7d7;
+  --notice-error-accent: #ff9f9f;
 }
 
 :root.theme-light {
@@ -31,6 +39,14 @@
   --btn-secondary: #eef3f9;
   --btn-secondary-border: #c3cfdd;
   --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --notice-success-bg: #ecfdf3;
+  --notice-success-border: #abefc6;
+  --notice-success-text: #374151;
+  --notice-success-accent: #067647;
+  --notice-error-bg: #fef3f2;
+  --notice-error-border: #fecdca;
+  --notice-error-text: #374151;
+  --notice-error-accent: #b42318;
 }
 
 :root.theme-dark {
@@ -125,9 +141,20 @@ th { color: var(--muted); font-weight: 600; }
   margin-bottom: 1rem;
   padding: 0.9rem 1rem;
   border-radius: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.error-box { background: rgba(181, 53, 53, 0.15); border: 1px solid #7a2b2b; color: #ffbaba; }
-.success-box { background: rgba(45, 128, 77, 0.15); border: 1px solid #2d7d4f; color: #b9f0cb; }
+.error-box {
+  background: var(--notice-error-bg);
+  border: 1px solid var(--notice-error-border);
+  color: var(--notice-error-text);
+}
+.success-box {
+  background: var(--notice-success-bg);
+  border: 1px solid var(--notice-success-border);
+  color: var(--notice-success-text);
+}
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -144,7 +171,7 @@ th { color: var(--muted); font-weight: 600; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .stack-form { display: grid; gap: 1rem; }
 .button-row { display: flex; gap: 0.75rem; }
-.status-inline.success { color: #2d7d4f; }
+.status-inline.success { color: var(--notice-success-accent); }
 .simple-list { margin: 0; padding-left: 1.2rem; }
 .simple-list li { margin-bottom: 0.6rem; }
 

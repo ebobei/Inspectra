@@ -49,7 +49,7 @@ async function readErrorMessage(response) {
   if (contentType.includes('application/json')) {
     try {
       const payload = await response.json()
-      return normalizeErrorPayload(payload, fallback)
+      return normalizeUserFacingError(normalizeErrorPayload(payload, fallback), response.status)
     } catch {
       return fallback
     }
@@ -57,7 +57,7 @@ async function readErrorMessage(response) {
 
   try {
     const text = await response.text()
-    return text.trim() || fallback
+    return normalizeUserFacingError(text, response.status) || fallback
   } catch {
     return fallback
   }
@@ -95,6 +95,44 @@ function normalizeErrorPayload(payload, fallback) {
   }
 
   return String(detail)
+}
+
+function normalizeUserFacingError(value, status) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+
+  if (isHtmlError(text)) {
+    if (status === 504 || /gateway time-out|gateway timeout/i.test(text)) {
+      return 'Сервис не успел ответить и вернул HTTP 504 Gateway Timeout. Повторите запрос позже или проверьте логи backend/worker.'
+    }
+
+    return `Backend вернул техническую HTML-страницу ошибки (HTTP ${status}). Подробности смотрите в логах backend/worker.`
+  }
+
+  if (isTechnicalDump(text)) {
+    return `Backend вернул техническую ошибку (HTTP ${status}). Подробности смотрите в логах backend/worker.`
+  }
+
+  if (text.length > 1200) {
+    return `${text.slice(0, 1200)}...`
+  }
+
+  return text
+}
+
+function isHtmlError(text) {
+  return /<!doctype html/i.test(text)
+    || /<html[\s>]/i.test(text)
+    || /<body[\s>]/i.test(text)
+    || /<head[\s>]/i.test(text)
+    || /<title>.*<\/title>/i.test(text)
+}
+
+function isTechnicalDump(text) {
+  return /traceback \(most recent call last\)/i.test(text)
+    || /stack trace/i.test(text)
+    || /nginx\/\d+/i.test(text)
+    || /gateway time-out/i.test(text)
 }
 
 export const api = {
