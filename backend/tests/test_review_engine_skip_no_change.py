@@ -97,3 +97,40 @@ def test_review_engine_marks_no_change_run_success_when_comment_was_recreated() 
 
     assert result.status == "success"
     assert session.current_publication_id == "publication-1"
+
+
+class FakeFailingLLMService:
+    def review(self, prompt_payload):
+        raise RuntimeError("LLM review failed after 1 attempt(s): HTTP 504 Gateway Time-out")
+
+
+class FakePromptBuilder:
+    def build_review_payload(self, **kwargs):
+        return {
+            "iteration_count": kwargs["iteration_count"],
+            "max_iterations": kwargs["max_iterations"],
+        }
+
+
+def test_review_engine_failed_llm_run_does_not_advance_successful_snapshot_state() -> None:
+    session = make_session()
+    session.last_seen_input_hash = "old-hash"
+    session.last_snapshot_id = "old-snapshot"
+    snapshot = SimpleNamespace(id="new-snapshot", normalized_text="changed", content_hash="new-hash")
+    db = FakeDB()
+    engine = ReviewEngine()
+    engine.llm_service = FakeFailingLLMService()
+    engine.prompt_builder = FakePromptBuilder()
+
+    try:
+        engine.run_for_snapshot(db, session=session, snapshot=snapshot, trigger_type="manual")
+    except RuntimeError as exc:
+        assert "HTTP 504" in str(exc)
+    else:
+        raise AssertionError("Expected review run to fail")
+
+    assert session.last_seen_input_hash == "old-hash"
+    assert session.last_snapshot_id == "old-snapshot"
+    assert session.last_success_at is None
+    assert session.last_error_at is not None
+    assert "HTTP 504" in session.last_error_message

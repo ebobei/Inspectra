@@ -19,6 +19,10 @@ from app.services.crypto_service import CryptoService
 logger = logging.getLogger(__name__)
 
 
+class UnsafePublicationBodyError(ValueError):
+    """Publication body contains a technical error response and must not be sent externally."""
+
+
 class PublicationService:
     def ensure_current_publication(
         self,
@@ -29,9 +33,22 @@ class PublicationService:
         target_system: str,
         target_object_id: str,
     ) -> Publication | None:
-        latest = self._get_latest_publication(db, session=session)
-        if latest is None or latest.status != "success":
+        latest = self._get_latest_successful_publication(db, session=session)
+        if latest is None:
             return None
+
+        unsafe_reason = self._get_unsafe_body_reason(latest.published_body_markdown)
+        if unsafe_reason:
+            return self._record_failed_publication(
+                db,
+                session=session,
+                review_run_id=review_run_id,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                external_comment_id=latest.external_comment_id,
+                publication_mode="noop",
+                error_message=f"Stored publication body is unsafe: {unsafe_reason}",
+            )
 
         if not latest.external_comment_id:
             return self.publish_or_update(
@@ -92,6 +109,22 @@ class PublicationService:
             .first()
         )
 
+    def _get_latest_successful_publication(
+        self,
+        db: Session,
+        *,
+        session: ReviewSession,
+    ) -> Publication | None:
+        return (
+            db.query(Publication)
+            .filter(
+                Publication.review_session_id == session.id,
+                Publication.status == "success",
+            )
+            .order_by(Publication.created_at.desc())
+            .first()
+        )
+
     def publish_or_update(
         self,
         db: Session,
@@ -103,7 +136,22 @@ class PublicationService:
         target_object_id: str,
         allow_noop: bool = True,
     ) -> Publication:
-        latest = self._get_latest_publication(db, session=session)
+        latest = self._get_latest_successful_publication(db, session=session)
+
+        unsafe_reason = self._get_unsafe_body_reason(body_markdown)
+        if unsafe_reason:
+            external_comment_id = latest.external_comment_id if latest else None
+            publication_mode = "update" if external_comment_id else "create"
+            return self._record_failed_publication(
+                db,
+                session=session,
+                review_run_id=review_run_id,
+                target_system=target_system,
+                target_object_id=target_object_id,
+                external_comment_id=external_comment_id,
+                publication_mode=publication_mode,
+                error_message=f"Publication body is unsafe and was not sent: {unsafe_reason}",
+            )
 
         external_comment_id = latest.external_comment_id if latest else None
 
@@ -178,8 +226,53 @@ class PublicationService:
         db.add(publication)
         db.flush()
 
-        session.current_publication_id = publication.id
+        if publication.status == "success":
+            session.current_publication_id = publication.id
         return publication
+
+    def _record_failed_publication(
+        self,
+        db: Session,
+        *,
+        session: ReviewSession,
+        review_run_id,
+        target_system: str,
+        target_object_id: str,
+        external_comment_id: str | None,
+        publication_mode: str,
+        error_message: str,
+    ) -> Publication:
+        publication = Publication(
+            review_session_id=session.id,
+            review_run_id=review_run_id,
+            target_system=target_system,
+            target_object_id=target_object_id,
+            external_comment_id=external_comment_id,
+            published_body_markdown="",
+            publication_mode=publication_mode,
+            status="failed",
+            published_at=None,
+            error_message=error_message,
+        )
+        db.add(publication)
+        db.flush()
+        return publication
+
+    def _get_unsafe_body_reason(self, body_markdown: str | None) -> str | None:
+        text = (body_markdown or "").strip()
+        if not text:
+            return "body is empty"
+
+        sample = text.lower()[:2000]
+        if sample.startswith("<!doctype html") or sample.startswith("<html"):
+            return "body looks like a full HTML document"
+        if "<head>" in sample and "<body" in sample:
+            return "body looks like an HTML error page"
+        if "gateway time-out" in sample and "nginx" in sample:
+            return "body contains an nginx gateway timeout page"
+        if "traceback (most recent call last)" in sample:
+            return "body contains a Python traceback"
+        return None
 
     def _publish_with_retries(self, **kwargs) -> tuple[str, str, str | None]:
         last_error: Exception | None = None

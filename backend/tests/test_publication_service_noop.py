@@ -124,3 +124,36 @@ def test_publication_service_recreates_missing_comment_on_no_change() -> None:
     assert result.publication_mode == "create"
     assert result.external_comment_id == "comment-2"
     assert result.status == "success"
+
+
+def test_publication_service_blocks_html_error_body_without_touching_current_publication() -> None:
+    latest = SimpleNamespace(
+        external_comment_id="comment-1",
+        published_body_markdown="previous good body",
+        status="success",
+    )
+    session = SimpleNamespace(id="session-1", current_publication_id="publication-1")
+    db = FakeDB(latest)
+    service = PublicationService()
+    publish_calls = []
+
+    def fake_publish_with_retries(**kwargs):
+        publish_calls.append(kwargs)
+        return "comment-1", "update", None
+
+    service._publish_with_retries = fake_publish_with_retries
+
+    result = service.publish_or_update(
+        db,
+        session=session,
+        review_run_id="run-1",
+        body_markdown="<html><head><title>504 Gateway Time-out</title></head><body>nginx</body></html>",
+        target_system="jira",
+        target_object_id="TEST-1",
+    )
+
+    assert result.status == "failed"
+    assert "unsafe" in result.error_message
+    assert result.published_body_markdown == ""
+    assert session.current_publication_id == "publication-1"
+    assert publish_calls == []

@@ -13,6 +13,10 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+class LLMReviewError(RuntimeError):
+    """Controlled LLM failure that must not be published as a review comment."""
+
+
 class LLMService:
     REQUIRED_KEYS = {
         "summary",
@@ -57,45 +61,79 @@ class LLMService:
                         headers=headers,
                         json=request_body,
                     )
-                    response.raise_for_status()
-                    data = response.json()
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise LLMReviewError(self._format_http_status_error(exc)) from exc
 
-                content = data["choices"][0]["message"]["content"]
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as exc:
+                        raise LLMReviewError("LLM response body is not valid JSON") from exc
+
+                try:
+                    content = data["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise LLMReviewError("LLM response does not contain message content") from exc
+
                 parsed = self._parse_json_content(content)
                 return self._normalize_response(parsed, prompt_payload)
 
-            except Exception as exc:
+            except LLMReviewError as exc:
                 last_error = exc
-                logger.warning(
-                    "LLM review attempt failed",
-                    extra={
-                        "event_type": "llm.review.retry",
-                        "session_id": prompt_payload.get("session_id"),
-                        "attempt": attempt,
-                        "llm_verify_ssl": settings.llm_verify_ssl,
-                    },
-                    exc_info=True,
+                self._log_retry(
+                    prompt_payload=prompt_payload,
+                    attempt=attempt,
+                    exc=exc,
+                )
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_error = LLMReviewError(self._format_request_error(exc))
+                self._log_retry(
+                    prompt_payload=prompt_payload,
+                    attempt=attempt,
+                    exc=exc,
+                )
+            except Exception as exc:
+                last_error = LLMReviewError(self._sanitize_error_message(str(exc)))
+                self._log_retry(
+                    prompt_payload=prompt_payload,
+                    attempt=attempt,
+                    exc=exc,
                 )
 
-                if attempt < settings.llm_max_retries:
-                    time.sleep(min(2 ** (attempt - 1), 4))
+            if attempt < settings.llm_max_retries:
+                time.sleep(min(2 ** (attempt - 1), 4))
 
+        message = self._sanitize_error_message(str(last_error) if last_error else "unknown error")
         logger.error(
-            "LLM review failed, using fallback response",
+            "LLM review failed without fallback publication",
             extra={
-                "event_type": "llm.review.fallback",
+                "event_type": "llm.review.failed",
                 "session_id": prompt_payload.get("session_id"),
                 "llm_verify_ssl": settings.llm_verify_ssl,
             },
-            exc_info=(
-                (type(last_error), last_error, last_error.__traceback__)
-                if last_error
-                else None
-            ),
         )
-        return self._safe_fallback(
-            prompt_payload,
-            str(last_error) if last_error else "unknown error",
+        raise LLMReviewError(
+            f"LLM review failed after {settings.llm_max_retries} attempt(s): {message}"
+        ) from last_error
+
+    def _log_retry(
+        self,
+        *,
+        prompt_payload: dict[str, Any],
+        attempt: int,
+        exc: Exception,
+    ) -> None:
+        logger.warning(
+            "LLM review attempt failed",
+            extra={
+                "event_type": "llm.review.retry",
+                "session_id": prompt_payload.get("session_id"),
+                "attempt": attempt,
+                "llm_verify_ssl": settings.llm_verify_ssl,
+                "error_type": exc.__class__.__name__,
+            },
+            exc_info=True,
         )
 
     def _validate_settings(self) -> None:
@@ -128,24 +166,30 @@ class LLMService:
 
     def _parse_json_content(self, content: Any) -> dict[str, Any]:
         if not isinstance(content, str):
-            raise ValueError("LLM response content is not a string")
+            raise LLMReviewError("LLM response content is not a string")
 
         text = content.strip()
+        if self._looks_like_html_error_page(text):
+            raise LLMReviewError("LLM response contained an HTML error page instead of JSON")
+
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
             text = re.sub(r"\s*```$", "", text).strip()
 
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             start = text.find("{")
             end = text.rfind("}")
             if start == -1 or end == -1 or end <= start:
-                raise
-            parsed = json.loads(text[start : end + 1])
+                raise LLMReviewError("LLM response content is not valid JSON") from exc
+            try:
+                parsed = json.loads(text[start : end + 1])
+            except json.JSONDecodeError as nested_exc:
+                raise LLMReviewError("LLM response content is not valid JSON") from nested_exc
 
         if not isinstance(parsed, dict):
-            raise ValueError("LLM response is not a JSON object")
+            raise LLMReviewError("LLM response is not a JSON object")
         return parsed
 
     def _normalize_response(
@@ -155,19 +199,25 @@ class LLMService:
     ) -> dict[str, Any]:
         missing = self.REQUIRED_KEYS.difference(parsed.keys())
         if missing:
-            raise ValueError(f"LLM response missing keys: {sorted(missing)}")
+            raise LLMReviewError(f"LLM response missing keys: {sorted(missing)}")
 
         if not isinstance(parsed["resolved_finding_keys"], list):
-            raise ValueError("resolved_finding_keys must be a list")
+            raise LLMReviewError("resolved_finding_keys must be a list")
 
         if not isinstance(parsed["still_open_findings"], list):
-            raise ValueError("still_open_findings must be a list")
+            raise LLMReviewError("still_open_findings must be a list")
 
         if not isinstance(parsed["new_findings"], list):
-            raise ValueError("new_findings must be a list")
+            raise LLMReviewError("new_findings must be a list")
 
         if not isinstance(parsed["final_comment_markdown"], str):
-            raise ValueError("final_comment_markdown must be a string")
+            raise LLMReviewError("final_comment_markdown must be a string")
+
+        final_comment_markdown = parsed["final_comment_markdown"].strip()
+        if not final_comment_markdown:
+            raise LLMReviewError("final_comment_markdown must not be empty")
+        if self._looks_like_html_error_page(final_comment_markdown):
+            raise LLMReviewError("final_comment_markdown contains an HTML error page")
 
         tone_level = str(prompt_payload.get("tone_level") or "neutral")
         return {
@@ -185,7 +235,7 @@ class LLMService:
                 parsed.get("new_findings", []),
                 default_tone_level=tone_level,
             ),
-            "final_comment_markdown": parsed["final_comment_markdown"].strip(),
+            "final_comment_markdown": final_comment_markdown,
         }
 
     def _normalize_findings(
@@ -302,3 +352,33 @@ class LLMService:
                 f"- Reason: {reason}\n"
             ),
         }
+
+    def _format_http_status_error(self, exc: httpx.HTTPStatusError) -> str:
+        response = exc.response
+        status_code = response.status_code
+        reason = response.reason_phrase or "HTTP error"
+        return f"LLM provider returned HTTP {status_code} {reason}"
+
+    def _format_request_error(self, exc: httpx.RequestError) -> str:
+        if isinstance(exc, httpx.TimeoutException):
+            return "LLM provider request timed out"
+        return f"LLM provider request failed: {exc.__class__.__name__}"
+
+    def _sanitize_error_message(self, message: str) -> str:
+        text = (message or "unknown error").strip()
+        if self._looks_like_html_error_page(text):
+            return "LLM provider returned an HTML error page"
+        text = re.sub(r"\s+", " ", text)
+        return text[:500]
+
+    def _looks_like_html_error_page(self, text: str) -> bool:
+        sample = (text or "").strip().lower()[:2000]
+        if not sample:
+            return False
+        if sample.startswith("<!doctype html") or sample.startswith("<html"):
+            return True
+        if "<head>" in sample and "<body" in sample:
+            return True
+        if "gateway time-out" in sample and "nginx" in sample:
+            return True
+        return False
