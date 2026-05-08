@@ -8,4 +8,6 @@ class WebhookAcceptedResponse(BaseModel):
     queued: bool = False
     trigger_type: str = "webhook"
     session_id: UUID | None = None
+    external_id: str | None = None
+    job_id: str | None = None
     reason: str | None = None

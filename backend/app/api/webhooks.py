@@ -3,7 +3,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -11,10 +11,12 @@ from app.models.review_session import ReviewSession
 from app.models.source_object import SourceObject
 from app.schemas.webhooks import WebhookAcceptedResponse
 from app.services.security_service import SecurityService
+from app.services.webhook_service import WebhookService
 from app.workers.queue import enqueue_unique_recheck
 
 router = APIRouter(prefix='/webhooks', tags=['webhooks'])
 security_service = SecurityService()
+webhook_service = WebhookService()
 
 
 def _jira_issue_key(payload: dict[str, Any]) -> str | None:
@@ -113,10 +115,10 @@ def _queue_for_external_id(db: Session, *, external_system: str, external_id: st
 async def jira_webhook(request: Request, db: Session = Depends(get_db)) -> WebhookAcceptedResponse:
     security_service.verify_webhook_secret(request)
     payload = await request.json()
-    issue_key = _jira_issue_key(payload)
-    if not issue_key:
-        return WebhookAcceptedResponse(accepted=True, queued=False, reason='Unsupported Jira webhook payload')
-    return _queue_for_external_id(db, external_system='jira', external_id=issue_key, event_fingerprint=_jira_event_fingerprint(payload))
+    try:
+        return webhook_service.handle_jira_webhook(db, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post('/gitlab', response_model=WebhookAcceptedResponse)

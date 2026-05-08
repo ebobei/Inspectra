@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     )
 
     webhook_shared_secret: str | None = None
+    jira_webhook_allowed_projects: str = ""
+    jira_webhook_required_label: str | None = None
+    jira_webhook_excluded_label: str | None = "no-ai-review"
+    jira_webhook_connector_id: str | None = None
 
 
 settings = Settings()
