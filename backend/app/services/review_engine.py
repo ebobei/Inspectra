@@ -102,7 +102,11 @@ class ReviewEngine:
             )
             prompt_payload["session_id"] = str(session.id)
 
-            llm_result = self.llm_service.review(prompt_payload)
+            llm_result = self.llm_service.review(
+                prompt_payload,
+                db=db,
+                review_run_id=review_run.id,
+            )
             review_run.output_hash = sha256_text(str(llm_result))
 
             self.finding_merge_service.merge(

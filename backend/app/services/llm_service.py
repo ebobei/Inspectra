@@ -4,11 +4,14 @@ import logging
 import re
 import time
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.llm_call import LLMCall
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,13 @@ class LLMService:
         "final_comment_markdown",
     }
 
-    def review(self, prompt_payload: dict[str, Any]) -> dict[str, Any]:
+    def review(
+        self,
+        prompt_payload: dict[str, Any],
+        *,
+        db: Session | None = None,
+        review_run_id: Any | None = None,
+    ) -> dict[str, Any]:
         self._validate_settings()
 
         payload_json = json.dumps(prompt_payload, ensure_ascii=False, indent=2)
@@ -51,6 +60,12 @@ class LLMService:
         last_error: Exception | None = None
 
         for attempt in range(1, settings.llm_max_retries + 1):
+            started_at = datetime.now(timezone.utc)
+            response_raw_text: str | None = None
+            response_json: dict[str, Any] | None = None
+            parsed_response_json: dict[str, Any] | None = None
+            http_status_code: int | None = None
+
             try:
                 with httpx.Client(
                     timeout=settings.request_timeout_sec,
@@ -61,6 +76,8 @@ class LLMService:
                         headers=headers,
                         json=request_body,
                     )
+                    http_status_code = response.status_code
+                    response_raw_text = response.text
                     try:
                         response.raise_for_status()
                     except httpx.HTTPStatusError as exc:
@@ -70,6 +87,7 @@ class LLMService:
                         data = response.json()
                     except json.JSONDecodeError as exc:
                         raise LLMReviewError("LLM response body is not valid JSON") from exc
+                    response_json = data if isinstance(data, dict) else {"value": data}
 
                 try:
                     content = data["choices"][0]["message"]["content"]
@@ -77,10 +95,40 @@ class LLMService:
                     raise LLMReviewError("LLM response does not contain message content") from exc
 
                 parsed = self._parse_json_content(content)
-                return self._normalize_response(parsed, prompt_payload)
+                parsed_response_json = parsed
+                normalized = self._normalize_response(parsed, prompt_payload)
+                self._record_llm_call(
+                    db=db,
+                    review_run_id=review_run_id,
+                    attempt_no=attempt,
+                    status="success",
+                    request_payload_json=request_body,
+                    response_raw_text=response_raw_text,
+                    response_json=response_json,
+                    parsed_response_json=parsed_response_json,
+                    http_status_code=http_status_code,
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
+                return normalized
 
             except LLMReviewError as exc:
                 last_error = exc
+                self._record_llm_call(
+                    db=db,
+                    review_run_id=review_run_id,
+                    attempt_no=attempt,
+                    status="failed",
+                    request_payload_json=request_body,
+                    response_raw_text=response_raw_text,
+                    response_json=response_json,
+                    parsed_response_json=parsed_response_json,
+                    http_status_code=http_status_code,
+                    error_type=exc.__class__.__name__,
+                    error_message=self._sanitize_error_message(str(exc)),
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
                 self._log_retry(
                     prompt_payload=prompt_payload,
                     attempt=attempt,
@@ -88,6 +136,21 @@ class LLMService:
                 )
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 last_error = LLMReviewError(self._format_request_error(exc))
+                self._record_llm_call(
+                    db=db,
+                    review_run_id=review_run_id,
+                    attempt_no=attempt,
+                    status="failed",
+                    request_payload_json=request_body,
+                    response_raw_text=response_raw_text,
+                    response_json=response_json,
+                    parsed_response_json=parsed_response_json,
+                    http_status_code=http_status_code,
+                    error_type=exc.__class__.__name__,
+                    error_message=self._sanitize_error_message(str(last_error)),
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
                 self._log_retry(
                     prompt_payload=prompt_payload,
                     attempt=attempt,
@@ -95,6 +158,21 @@ class LLMService:
                 )
             except Exception as exc:
                 last_error = LLMReviewError(self._sanitize_error_message(str(exc)))
+                self._record_llm_call(
+                    db=db,
+                    review_run_id=review_run_id,
+                    attempt_no=attempt,
+                    status="failed",
+                    request_payload_json=request_body,
+                    response_raw_text=response_raw_text,
+                    response_json=response_json,
+                    parsed_response_json=parsed_response_json,
+                    http_status_code=http_status_code,
+                    error_type=exc.__class__.__name__,
+                    error_message=self._sanitize_error_message(str(last_error)),
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
                 self._log_retry(
                     prompt_payload=prompt_payload,
                     attempt=attempt,
@@ -116,6 +194,58 @@ class LLMService:
         raise LLMReviewError(
             f"LLM review failed after {settings.llm_max_retries} attempt(s): {message}"
         ) from last_error
+
+
+    def _record_llm_call(
+        self,
+        *,
+        db: Session | None,
+        review_run_id: Any | None,
+        attempt_no: int,
+        status: str,
+        request_payload_json: dict[str, Any],
+        started_at: datetime,
+        finished_at: datetime,
+        response_raw_text: str | None = None,
+        response_json: dict[str, Any] | None = None,
+        parsed_response_json: dict[str, Any] | None = None,
+        http_status_code: int | None = None,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        if db is None or review_run_id is None:
+            return
+
+        duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+        llm_call = LLMCall(
+            review_run_id=review_run_id,
+            attempt_no=attempt_no,
+            provider=self._provider_name(),
+            model=settings.llm_model,
+            status=status,
+            http_status_code=http_status_code,
+            request_payload_json=request_payload_json,
+            response_raw_text=response_raw_text,
+            response_json=response_json,
+            parsed_response_json=parsed_response_json,
+            error_type=error_type,
+            error_message=error_message,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=duration_ms,
+        )
+        db.add(llm_call)
+        db.flush()
+
+    def _provider_name(self) -> str:
+        base_url = (settings.llm_base_url or "").lower()
+        if "openrouter" in base_url:
+            return "openrouter"
+        if "deepseek" in base_url:
+            return "deepseek"
+        if "ollama" in base_url or "11434" in base_url:
+            return "ollama"
+        return "custom"
 
     def _log_retry(
         self,

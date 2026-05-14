@@ -38,3 +38,4 @@ class ReviewRun(BaseModel):
 
     review_session = relationship("ReviewSession", back_populates="runs")
     snapshot = relationship("SourceSnapshot", back_populates="runs")
+    llm_calls = relationship("LLMCall", back_populates="review_run", cascade="all, delete-orphan")
